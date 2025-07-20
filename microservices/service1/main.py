@@ -3,7 +3,17 @@ import uvicorn
 from pydantic import BaseModel
 import os
 
-app = FastAPI(title="Service 1")
+app = FastAPI(
+    title="Service 1",
+    description="Service 1 API",
+    version="0.1.0",
+    openapi_tags=[
+        {
+            "name": "items",
+            "description": "Operations with items",
+        },
+    ]
+)
 
 class Item(BaseModel):
     name: str
@@ -19,17 +29,17 @@ def read_root():
 def health_check():
     return {"status": "healthy"}
 
-@app.get("/items")
+@app.get("/items", tags=["items"])
 def get_items():
     return items
 
-@app.get("/items/{item_id}")
+@app.get("/items/{item_id}", tags=["items"])
 def get_item(item_id: str):
     if item_id not in items:
         raise HTTPException(status_code=404, detail="Item not found")
     return items[item_id]
 
-@app.post("/items")
+@app.post("/items", tags=["items"])
 def create_item(item: Item):
     item_id = str(len(items) + 1)
     items[item_id] = item

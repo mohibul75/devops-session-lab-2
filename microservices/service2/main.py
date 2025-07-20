@@ -4,7 +4,21 @@ from pydantic import BaseModel
 import os
 import requests
 
-app = FastAPI(title="Service 2")
+app = FastAPI(
+    title="Service 2",
+    description="Service 2 API",
+    version="0.1.0",
+    openapi_tags=[
+        {
+            "name": "tasks",
+            "description": "Operations with tasks",
+        },
+        {
+            "name": "status",
+            "description": "Status operations",
+        }
+    ]
+)
 
 class Task(BaseModel):
     title: str
@@ -16,27 +30,27 @@ tasks = {}
 def read_root():
     return {"message": "Welcome to Service 2", "status": "running"}
 
-@app.get("/health")
+@app.get("/health", tags=["status"])
 def health_check():
     return {"status": "healthy"}
 
-@app.get("/tasks")
+@app.get("/tasks", tags=["tasks"])
 def get_tasks():
     return tasks
 
-@app.get("/tasks/{task_id}")
+@app.get("/tasks/{task_id}", tags=["tasks"])
 def get_task(task_id: str):
     if task_id not in tasks:
         raise HTTPException(status_code=404, detail="Task not found")
     return tasks[task_id]
 
-@app.post("/tasks")
+@app.post("/tasks", tags=["tasks"])
 def create_task(task: Task):
     task_id = str(len(tasks) + 1)
     tasks[task_id] = task
     return {"task_id": task_id, "task": task}
 
-@app.get("/service1-status")
+@app.get("/service1-status", tags=["status"])
 def get_service1_status():
     try:
         service1_url = os.environ.get("SERVICE1_URL", "http://service1:8000")
