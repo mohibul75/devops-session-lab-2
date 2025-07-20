@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  service1:
+    build:
+      context: ./microservices/service1
+    container_name: service1
+    restart: always
+    environment:
+      - PORT=8000
+    networks:
+      - microservices-network
+
+  service2:
+    build:
+      context: ./microservices/service2
+    container_name: service2
+    restart: always
+    environment:
+      - PORT=8001
+      - SERVICE1_URL=http://service1:8000
+    networks:
+      - microservices-network
+    depends_on:
+      - service1
+
+  nginx:
+    image: nginx:1.25
+    container_name: nginx
+    restart: always
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - microservices-network
+    depends_on:
+      - service1
+      - service2
+
+networks:
+  microservices-network:
+    driver: bridge 

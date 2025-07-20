@@ -1,0 +1,194 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies for Service 1
+      run: |
+        cd microservices/service1
+        pip install -r requirements.txt
+    
+    - name: Test Service 1
+      run: |
+        cd microservices/service1
+        pytest
+    
+    - name: Install dependencies for Service 2
+      run: |
+        cd microservices/service2
+        pip install -r requirements.txt
+    
+    - name: Test Service 2
+      run: |
+        cd microservices/service2
+        pytest
+
+  build:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+        aws-region: ${{ secrets.AWS_REGION }}
+    
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v1
+    
+    - name: Build and push Service 1 image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: service1
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        cd microservices/service1
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+    
+    - name: Build and push Service 2 image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: service2
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        cd microservices/service2
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+    
+    - name: Build and push Nginx image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: nginx
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -f nginx/Dockerfile nginx/
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+  deploy:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+        aws-region: ${{ secrets.AWS_REGION }}
+    
+    - name: Deploy to EC2
+      uses: appleboy/ssh-action@master
+      with:
+        host: ${{ secrets.EC2_HOST }}
+        username: ${{ secrets.EC2_USERNAME }}
+        key: ${{ secrets.EC2_SSH_KEY }}
+        script: |
+          # Login to ECR using OIDC token
+          aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
+          
+          # Set image references
+          SERVICE1_IMAGE="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/service1:latest"
+          SERVICE2_IMAGE="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/service2:latest"
+          NGINX_IMAGE="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/nginx:latest"
+          
+          # Force pull latest images (with --no-cache to ensure we get the newest version)
+          echo "Pulling latest images..."
+          docker pull --no-cache $SERVICE1_IMAGE
+          docker pull --no-cache $SERVICE2_IMAGE
+          docker pull --no-cache $NGINX_IMAGE
+          
+          # Create app directory if it doesn't exist
+          mkdir -p ~/app
+          
+          # Update docker-compose.yml with ECR image paths
+          cd ~/app
+          cat > docker-compose.yml << 'EOL'
+          version: '3.8'
+          
+          services:
+            service1:
+              image: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/service1:latest
+              container_name: service1
+              restart: always
+              environment:
+                - PORT=8000
+              networks:
+                - microservices-network
+          
+            service2:
+              image: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/service2:latest
+              container_name: service2
+              restart: always
+              environment:
+                - PORT=8001
+                - SERVICE1_URL=http://service1:8000
+              networks:
+                - microservices-network
+              depends_on:
+                - service1
+          
+            nginx:
+              image: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/nginx:latest
+              container_name: nginx
+              restart: always
+              ports:
+                - "80:80"
+              networks:
+                - microservices-network
+              depends_on:
+                - service1
+                - service2
+          
+          networks:
+            microservices-network:
+              driver: bridge
+          EOL
+          
+          # Stop and remove existing containers to ensure clean deployment
+          echo "Stopping existing containers..."
+          docker-compose down --remove-orphans
+          
+          # Remove any dangling images to free up space
+          echo "Cleaning up dangling images..."
+          docker image prune -f
+          
+          # Start containers with the new images
+          echo "Starting containers with new images..."
+          docker-compose up -d
+          
+          # Verify containers are running
+          echo "Verifying deployment..."
+          docker-compose ps 
