@@ -124,7 +124,9 @@ jobs:
           
           # Use the specific SHA tag to ensure we get the exact image built in this workflow
           IMAGE_TAG="${{ needs.build.outputs.image_tag }}"
-          ECR_REGISTRY="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com"
+          AWS_ACCOUNT_ID="${{ secrets.AWS_ACCOUNT_ID }}"
+          AWS_REGION="${{ secrets.AWS_REGION }}"
+          ECR_REGISTRY="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
           
           # Pull the specific images we just built
           echo "Pulling images with tag: $IMAGE_TAG"
