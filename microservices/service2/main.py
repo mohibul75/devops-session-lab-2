@@ -17,7 +17,8 @@ app = FastAPI(
             "name": "status",
             "description": "Status operations",
         }
-    ]
+    ],
+    root_path="/service2"
 )
 
 class Task(BaseModel):
@@ -58,6 +59,11 @@ def get_service1_status():
         return {"service1_status": response.json()}
     except Exception as e:
         return {"service1_status": "unavailable", "error": str(e)}
+
+# Add this to make OpenAPI docs work behind a proxy
+@app.get("/openapi.json", include_in_schema=False)
+async def get_open_api_endpoint():
+    return app.openapi()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8001))

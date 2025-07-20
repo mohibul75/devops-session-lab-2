@@ -12,7 +12,8 @@ app = FastAPI(
             "name": "items",
             "description": "Operations with items",
         },
-    ]
+    ],
+    root_path="/service1"
 )
 
 class Item(BaseModel):
@@ -44,6 +45,11 @@ def create_item(item: Item):
     item_id = str(len(items) + 1)
     items[item_id] = item
     return {"item_id": item_id, "item": item}
+
+# Add this to make OpenAPI docs work behind a proxy
+@app.get("/openapi.json", include_in_schema=False)
+async def get_open_api_endpoint():
+    return app.openapi()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
