@@ -47,6 +47,8 @@ jobs:
     needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
+    outputs:
+      image_tag: ${{ github.sha }}
     
     steps:
     - uses: actions/checkout@v3
@@ -120,28 +122,27 @@ jobs:
           # Login to ECR using OIDC token
           aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
           
-          # Set image references
-          SERVICE1_IMAGE="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/service1:latest"
-          SERVICE2_IMAGE="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/service2:latest"
-          NGINX_IMAGE="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/nginx:latest"
+          # Use the specific SHA tag to ensure we get the exact image built in this workflow
+          IMAGE_TAG="${{ needs.build.outputs.image_tag }}"
+          ECR_REGISTRY="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com"
           
-          # Force pull latest images (with --no-cache to ensure we get the newest version)
-          echo "Pulling latest images..."
-          docker pull --no-cache $SERVICE1_IMAGE
-          docker pull --no-cache $SERVICE2_IMAGE
-          docker pull --no-cache $NGINX_IMAGE
+          # Pull the specific images we just built
+          echo "Pulling images with tag: $IMAGE_TAG"
+          docker pull $ECR_REGISTRY/service1:$IMAGE_TAG
+          docker pull $ECR_REGISTRY/service2:$IMAGE_TAG
+          docker pull $ECR_REGISTRY/nginx:$IMAGE_TAG
           
           # Create app directory if it doesn't exist
           mkdir -p ~/app
           
-          # Update docker-compose.yml with ECR image paths
+          # Update docker-compose.yml with ECR image paths using the specific tag
           cd ~/app
-          cat > docker-compose.yml << 'EOL'
+          cat > docker-compose.yml << EOL
           version: '3.8'
           
           services:
             service1:
-              image: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/service1:latest
+              image: $ECR_REGISTRY/service1:$IMAGE_TAG
               container_name: service1
               restart: always
               environment:
@@ -150,7 +151,7 @@ jobs:
                 - microservices-network
           
             service2:
-              image: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/service2:latest
+              image: $ECR_REGISTRY/service2:$IMAGE_TAG
               container_name: service2
               restart: always
               environment:
@@ -162,7 +163,7 @@ jobs:
                 - service1
           
             nginx:
-              image: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/nginx:latest
+              image: $ECR_REGISTRY/nginx:$IMAGE_TAG
               container_name: nginx
               restart: always
               ports:
@@ -192,4 +193,9 @@ jobs:
           
           # Verify containers are running
           echo "Verifying deployment..."
-          docker-compose ps 
+          docker-compose ps
+          
+          # Tag these images as latest locally for easier reference
+          docker tag $ECR_REGISTRY/service1:$IMAGE_TAG $ECR_REGISTRY/service1:latest
+          docker tag $ECR_REGISTRY/service2:$IMAGE_TAG $ECR_REGISTRY/service2:latest
+          docker tag $ECR_REGISTRY/nginx:$IMAGE_TAG $ECR_REGISTRY/nginx:latest 
